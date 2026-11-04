@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AES Encrypt / Decrypt</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.2.0/crypto-js.min.js"></script>
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --text:#1d2330; --muted:#667085; --border:#d0d5dd; --accent:#2563eb; --ok:#067647; --err:#b42318; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#12151c; --card:#1b2029; --text:#e6e9ef; --muted:#98a2b3; --border:#344054; --accent:#5b8def; --ok:#47cd89; --err:#f97066; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:24px 16px; background:var(--bg); color:var(--text); font:15px/1.5 system-ui,Segoe UI,Roboto,sans-serif; }
+  main { max-width:760px; margin:0 auto; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  p.sub { margin:0 0 20px; color:var(--muted); }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:18px; margin-bottom:16px; }
+  label { display:block; font-weight:600; margin:12px 0 4px; }
+  label:first-child { margin-top:0; }
+  input, textarea { width:100%; padding:9px 10px; border:1px solid var(--border); border-radius:6px; background:transparent; color:var(--text); font:inherit; }
+  textarea { min-height:110px; resize:vertical; font-family:ui-monospace,Consolas,monospace; font-size:13px; }
+  .row { display:flex; gap:12px; flex-wrap:wrap; }
+  .row > div { flex:1 1 260px; }
+  .keywrap { position:relative; }
+  .keywrap button { position:absolute; right:4px; top:4px; padding:4px 8px; font-size:12px; }
+  select { margin-top:6px; padding:6px 8px; border:1px solid var(--border); border-radius:6px; background:transparent; color:var(--text); font:inherit; }
+  option { color:#000; }
+  .hint { font-size:12px; color:var(--muted); margin-top:3px; }
+  button { cursor:pointer; border:1px solid var(--border); background:transparent; color:var(--text); border-radius:6px; padding:9px 16px; font:inherit; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
+  .actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:14px; }
+  #status { min-height:22px; margin-top:10px; font-weight:600; }
+  #status.ok { color:var(--ok); } #status.err { color:var(--err); }
+</style>
+</head>
+<body>
+<main>
+  <h1>AES Encrypt / Decrypt</h1>
+  <p class="sub">AES-CBC · PKCS7 · HMAC-SHA256 · output = Base64(IV ‖ ciphertext ‖ MAC). Runs entirely in your browser.</p>
+
+  <div class="card">
+    <div class="row">
+      <div>
+        <label for="enc">Encryption key (ENC_KEY)</label>
+        <div class="keywrap"><input id="enc" type="password" autocomplete="off" spellcheck="false"><button type="button" data-toggle="enc">Show</button></div>
+        <select id="encFmt"><option value="utf8">UTF-8 text</option><option value="hex">Hex</option></select>
+        <div class="hint" id="encHint">Standard AES needs 16 / 24 / 32 bytes. A 64-char key is usually hex (32 bytes).</div>
+      </div>
+      <div>
+        <label for="mac">MAC key (MAC_KEY)</label>
+        <div class="keywrap"><input id="mac" type="password" autocomplete="off" spellcheck="false"><button type="button" data-toggle="mac">Show</button></div>
+        <select id="macFmt"><option value="utf8">UTF-8 text</option><option value="hex">Hex</option></select>
+        <div class="hint">Any length.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <label for="input">Input (plain text to encrypt, or Base64 to decrypt)</label>
+    <textarea id="input" spellcheck="false"></textarea>
+    <div class="actions">
+      <button class="primary" id="btnEnc">Encrypt</button>
+      <button class="primary" id="btnDec">Decrypt</button>
+      <button id="btnSwap">Use output as input</button>
+      <button id="btnClear">Clear</button>
+    </div>
+    <div id="status"></div>
+    <label for="output">Output</label>
+    <textarea id="output" readonly spellcheck="false"></textarea>
+    <div class="actions"><button id="btnCopy">Copy output</button></div>
+  </div>
+</main>
+
+<script>
+const IV_LENGTH = 16;
+const $ = id => document.getElementById(id);
+
+function setStatus(msg, ok) {
+  const s = $("status");
+  s.textContent = msg;
+  s.className = ok ? "ok" : "err";
+}
+
+function parseKey(v, fmt) {
+  if (fmt === "hex") {
+    if (!/^([0-9a-fA-F]{2})+$/.test(v)) throw new Error("Key is not valid hex (needs an even number of 0-9a-f characters).");
+    return CryptoJS.enc.Hex.parse(v);
+  }
+  return CryptoJS.enc.Utf8.parse(v);
+}
+
+let keyWarning = "";
+function getKeys() {
+  const enc = $("enc").value, mac = $("mac").value;
+  if (!enc) throw new Error("Enter the encryption key.");
+  if (!mac) throw new Error("Enter the MAC key.");
+  const ENC_KEY = parseKey(enc, $("encFmt").value);
+  const MAC_KEY = parseKey(mac, $("macFmt").value);
+  keyWarning = [16, 24, 32].includes(ENC_KEY.sigBytes) ? "" :
+    " Warning: ENC_KEY is " + ENC_KEY.sigBytes + " bytes (non-standard AES); only crypto-js will be able to decrypt this.";
+  return { ENC_KEY, MAC_KEY };
+}
+
+function encrypt(text, ENC_KEY, MAC_KEY) {
+  const iv = CryptoJS.lib.WordArray.random(IV_LENGTH);
+  const ciphertext = CryptoJS.AES.encrypt(text, ENC_KEY, {
+    iv, mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7
+  }).ciphertext;
+  const mac = CryptoJS.HmacSHA256(iv.clone().concat(ciphertext), MAC_KEY);
+  return CryptoJS.enc.Base64.stringify(iv.clone().concat(ciphertext).concat(mac));
+}
+
+function decrypt(b64, ENC_KEY, MAC_KEY) {
+  const data = CryptoJS.enc.Base64.parse(b64.trim());
+  if (data.sigBytes < IV_LENGTH + 16 + 32) throw new Error("Input is too short to be valid.");
+  const iv = CryptoJS.lib.WordArray.create(data.words.slice(0, IV_LENGTH / 4), IV_LENGTH);
+  const mac = CryptoJS.lib.WordArray.create(data.words.slice(-8), 32);
+  const ctWords = data.words.slice(IV_LENGTH / 4, -8);
+  const ciphertext = CryptoJS.lib.WordArray.create(ctWords, data.sigBytes - IV_LENGTH - 32);
+  const computed = CryptoJS.HmacSHA256(iv.clone().concat(ciphertext), MAC_KEY);
+  if (mac.toString(CryptoJS.enc.Hex) !== computed.toString(CryptoJS.enc.Hex))
+    throw new Error("MAC verification failed (wrong MAC key, or data was altered).");
+  const decrypted = CryptoJS.AES.decrypt({ ciphertext }, ENC_KEY, {
+    iv, mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7
+  });
+  const text = decrypted.toString(CryptoJS.enc.Utf8);
+  if (text === "") throw new Error("Decryption failed or no text returned (wrong encryption key?).");
+  return text;
+}
+
+function run(fn) {
+  try {
+    const { ENC_KEY, MAC_KEY } = getKeys();
+    const input = $("input").value;
+    if (!input) throw new Error("Enter some input.");
+    $("output").value = fn(input, ENC_KEY, MAC_KEY);
+    return true;
+  } catch (e) {
+    $("output").value = "";
+    setStatus(e.message || String(e), false);
+    return false;
+  }
+}
+
+$("btnEnc").onclick = () => { if (run(encrypt)) setStatus("Encrypted successfully." + keyWarning, true); };
+$("btnDec").onclick = () => { if (run(decrypt)) setStatus("Decrypted successfully (MAC verified)." + keyWarning, true); };
+$("btnSwap").onclick = () => { $("input").value = $("output").value; $("output").value = ""; setStatus("", true); };
+$("btnClear").onclick = () => { $("input").value = ""; $("output").value = ""; setStatus("", true); };
+$("btnCopy").onclick = async () => {
+  const v = $("output").value;
+  if (!v) return setStatus("Nothing to copy.", false);
+  try { await navigator.clipboard.writeText(v); }
+  catch { $("output").select(); document.execCommand("copy"); }
+  setStatus("Output copied.", true);
+};
+document.querySelectorAll("[data-toggle]").forEach(b => b.onclick = () => {
+  const i = $(b.dataset.toggle), show = i.type === "password";
+  i.type = show ? "text" : "password";
+  b.textContent = show ? "Hide" : "Show";
+});
+</script>
+</body>
+</html>
